@@ -1,65 +1,56 @@
 import streamlit as st
 
-# --- LATEST TARIFF DATA (MERC ORDER FY 2026-27) ---
-# Adani & Tata rates reduced as per newest regulations
-TARIFFS = {
-    "Adani Electricity (Malad)": {
-        "slabs": [(100, 2.65), (200, 5.85), (200, 7.10), (float('inf'), 8.35)],
-        "wheeling": 2.28,
-        "fixed": 135.0,
-        "tod_rebate": 0.55  # 2026 Solar Hour Rebate
-    },
-    "Tata Power": {
-        "slabs": [(100, 2.05), (200, 5.00), (200, 10.50), (float('inf'), 11.50)],
-        "wheeling": 3.05,
-        "fixed": 135.0,
-        "tod_rebate": 0.85
-    }
+# --- ACTUAL DATA FROM MARCH 2026 BILL ---
+TATA_RATES = {
+    "slabs": [(100, 2.00), (200, 5.20), (200, 10.79), (float('inf'), 11.79)],
+    "wheeling_rate": 2.93,
+    "fixed_base": 160.0,
+    "fixed_addon": 250.0, # For 3-phase/Load > 10kW
+    "tose_rate": 0.3594,
+    "wheeling_loss_factor": 1.0536 # 5.36% adjustment
 }
 
-def calculate_bill(units, provider, solar_units=0):
-    data = TARIFFS[provider]
-    energy_charge = 0
-    temp_units = units
+def calculate_accurate_bill(metered_units, phase_type="3 Phase"):
+    # 1. Calculate Billed Units (Account for Wheeling Loss)
+    billed_units = metered_units * TATA_RATES["wheeling_loss_factor"]
     
-    # Slab-wise Calculation
-    for limit, rate in data["slabs"]:
+    # 2. Energy Charges (Slab-wise)
+    energy_charge = 0
+    temp_units = billed_units
+    for limit, rate in TATA_RATES["slabs"]:
         if temp_units <= 0: break
         consumed = min(temp_units, limit)
         energy_charge += consumed * rate
         temp_units -= consumed
         
-    wheeling = units * data["wheeling"]
-    rebate = solar_units * data["tod_rebate"]
-    
-    # Adding fixed charges and estimated 16% Govt Duty
-    subtotal = energy_charge + wheeling + data["fixed"] - rebate
-    total_with_tax = subtotal * 1.16 
-    
-    return round(total_with_tax, 2), round(energy_charge, 2), round(wheeling, 2), round(rebate, 2)
-
-# --- UI SETUP ---
-st.set_page_config(page_title="Society Bill Finder", page_icon="⚡")
-st.title("⚡ Mumbai Society Electricity Clarifier")
-st.info("Updated with April 2026 Tariff Cuts")
-
-units = st.number_input("Enter Monthly Units from Bill:", min_value=0, value=250)
-solar_units = st.slider("Units used during day (9 AM - 5 PM):", 0, units, 50)
-
-if st.button("Compare Providers"):
-    col1, col2 = st.columns(2)
-    
-    a_total, a_ec, a_wc, a_rb = calculate_bill(units, "Adani Electricity (Malad)", solar_units)
-    t_total, t_ec, t_wc, t_rb = calculate_bill(units, "Tata Power", solar_units)
-    
-    with col1:
-        st.metric("Adani Total", f"₹{a_total}")
-        st.caption(f"Energy: ₹{a_ec} | Wheel: ₹{a_wc}")
+    # 3. Fixed Charges
+    fixed = TATA_RATES["fixed_base"]
+    if phase_type == "3 Phase":
+        fixed += TATA_RATES["fixed_addon"]
         
-    with col2:
-        st.metric("Tata Total", f"₹{t_total}")
-        st.caption(f"Energy: ₹{t_ec} | Wheel: ₹{t_wc}")
+    # 4. Other Components
+    wheeling = billed_units * TATA_RATES["wheeling_rate"]
+    tose = billed_units * TATA_RATES["tose_rate"]
+    
+    # 5. Taxes (16% Duty on Energy + Wheeling + Fixed)
+    subtotal = energy_charge + wheeling + fixed
+    e_duty = subtotal * 0.16
+    
+    total = subtotal + tose + e_duty
+    return round(total), round(billed_units, 1)
 
-    diff = round(abs(a_total - t_total), 2)
-    cheaper = "Tata" if t_total < a_total else "Adani"
-    st.success(f"**{cheaper}** saves you approximately **₹{diff}** per month!")
+# --- STREAMLIT UI ---
+st.title("⚡ Society Flat Bill Decoder (March 2026) - Tejas")
+st.info("Logic calibrated as per Tata Power Bill")
+
+m_units = st.number_input("Enter METERED Units (from your meter):", value=465)
+phase = st.selectbox("Connection Type:", ["3 Phase", "1 Phase"])
+
+if st.button("Analyze My Bill"):
+    total_amt, b_units = calculate_accurate_bill(m_units, phase)
+    
+    st.metric("Estimated Total Bill", f"₹{total_amt}")
+    st.write(f"**Note:** Your metered {m_units} units become **{b_units} billed units** due to the 5.36% Malad network loss.")
+    
+    if total_amt > 6000:
+        st.warning("Your bill is in the high-usage slab (>300 units). Consider shifting heavy loads to 'Solar Hours' if you have a smart meter.")
